@@ -328,7 +328,7 @@
       <div>
         <p class="eyebrow">Runs entirely in your browser</p>
         <h2>See what your hands<br>are <em>actually</em> saying.</h2>
-        <p class="lead">HANDSCOPE watches your webcam in real time, maps 21 points on your hand, and recognizes thirteen gestures — fist, peace sign, OK sign, thumbs down, and more — plus exactly where your hand is in frame.</p>
+        <p class="lead">HANDSCOPE watches your webcam in real time, tracks both hands at once, maps 21 points per hand, and recognizes thirteen gestures — fist, peace sign, OK sign, thumbs down, and more — plus exactly where each hand is in frame.</p>
         <div class="hero-ctas">
           <button class="cta" data-go="tracker">Open Tracker</button>
           <button class="cta outline" data-go="games">Browse Games</button>
@@ -357,7 +357,7 @@
     </div>
     <div class="steps">
       <div class="step"><div class="n">01</div><h4>Allow the camera</h4><p>One click, one prompt. The feed never leaves your device — there's no server involved.</p></div>
-      <div class="step"><div class="n">02</div><h4>We map 21 points</h4><p>A tracking model finds your wrist, knuckles, and fingertips, thirty times a second.</p></div>
+      <div class="step"><div class="n">02</div><h4>We map 21 points — per hand</h4><p>A tracking model finds your wrist, knuckles, and fingertips, on up to two hands, thirty times a second.</p></div>
       <div class="step"><div class="n">03</div><h4>Gestures drive games</h4><p>Shapes your hand makes — and where it is — become moves, answers, and reactions.</p></div>
     </div>
 
@@ -383,23 +383,20 @@
     </div>
     <div class="panel">
       <h2>Live Readout</h2>
-      <div class="stat-block">
-        <div class="label">Current gesture</div>
-        <div class="value" id="bigGesture" style="font-size:20px;">NO HAND</div>
+      <p class="hint">Both hands are tracked at once — the first one detected drives speed and games.</p>
+      <div class="row" id="handsReadout">
+        <div class="stat-block">
+          <div class="label">Current gesture</div>
+          <div class="value" style="font-size:18px;">NO HAND</div>
+        </div>
       </div>
-      <div class="row">
-        <div class="stat-block">
-          <div class="label">Position</div>
-          <div class="value" id="bigPosition" style="font-size:16px;">—</div>
-        </div>
-        <div class="stat-block">
-          <div class="label">Speed</div>
-          <div class="value" id="bigSpeed" style="font-size:16px;">0 px/s</div>
-        </div>
+      <div class="stat-block">
+        <div class="label">Primary-hand speed</div>
+        <div class="value" id="bigSpeed" style="font-size:16px;">0 px/s</div>
       </div>
       <h2>Recognized Gestures</h2>
       <div class="gesture-key" id="gestureKeyGrid"></div>
-      <p class="hint">Position is read against the frame you see (mirrored, like a selfie), split into four quadrants plus a center zone. Detection uses simple finger-geometry, so it works best with your palm facing the camera in decent light.</p>
+      <p class="hint">Position is read against the frame you see (mirrored, like a selfie), split into four quadrants plus a center zone. Detection uses simple finger-geometry, so it works best with your palm(s) facing the camera in decent light.</p>
     </div>
   </section>
 
@@ -626,6 +623,8 @@
   /* ================= SHARED TRACKING STATE ================= */
   const state = {
     landmarks: null,
+    allLandmarks: [],
+    handsInfo: [],
     gestureObj: GESTURES.OPEN_HAND,
     gesture: 'No Hand',
     rpsChoice: null,
@@ -723,19 +722,26 @@
 
   /* ================= MEDIAPIPE HANDS ================= */
   const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-  hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.6 });
+  hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.6 });
   hands.onResults(onResults);
 
   function onResults(results){
     const now = performance.now();
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0){
+      state.allLandmarks = results.multiHandLandmarks;
+      state.handsInfo = results.multiHandLandmarks.map((lm, i) => {
+        const handedness = (results.multiHandedness && results.multiHandedness[i]) ? results.multiHandedness[i].label : ('Hand ' + (i + 1));
+        return { landmarks: lm, gesture: classifyGesture(lm), position: classifyPosition(lm), label: handedness };
+      });
+
+      // Primary hand (first detected) keeps driving games and the single-hand HUD/speed readout.
       const lm = results.multiHandLandmarks[0];
       state.landmarks = lm;
-      const g = classifyGesture(lm);
+      const g = state.handsInfo[0].gesture;
       state.gestureObj = g;
       state.gesture = g.label;
       state.rpsChoice = g.rps;
-      state.position = classifyPosition(lm);
+      state.position = state.handsInfo[0].position;
 
       const px = (1 - lm[9].x) * W;
       const py = lm[9].y * H;
@@ -753,6 +759,8 @@
       state.lastPalmPx = { x: px, y: py };
       state.lastTime = now;
     } else {
+      state.allLandmarks = [];
+      state.handsInfo = [];
       state.landmarks = null;
       state.gestureObj = GESTURES.OPEN_HAND;
       state.gesture = 'No Hand';
@@ -775,10 +783,12 @@
     c.scale(-1, 1);
     c.translate(-W, 0);
     c.drawImage(video, 0, 0, W, H);
-    if (state.landmarks){
-      drawConnectors(c, state.landmarks, HAND_CONNECTIONS, { color: '#4cf2c0', lineWidth: 3 });
-      drawLandmarks(c, state.landmarks, { color: '#ff9a4d', lineWidth: 1, radius: 3 });
-    }
+    state.allLandmarks.forEach((lm, i) => {
+      const lineColor = i === 0 ? '#4cf2c0' : '#ff9a4d';
+      const dotColor = i === 0 ? '#ff9a4d' : '#4cf2c0';
+      drawConnectors(c, lm, HAND_CONNECTIONS, { color: lineColor, lineWidth: 3 });
+      drawLandmarks(c, lm, { color: dotColor, lineWidth: 1, radius: 3 });
+    });
     c.restore();
   }
   function drawQuadrantGrid(c){
@@ -794,17 +804,29 @@
 
   function renderHome(){
     drawBaseFrame(ctx.home);
-    document.getElementById('homeHudGesture').textContent = state.gesture;
-    document.getElementById('homeHudPosition').textContent = state.position;
+    document.getElementById('homeHudGesture').textContent = state.handsInfo.length
+      ? state.handsInfo.map(h => h.gesture.label).join(' / ') : 'No Hand';
+    document.getElementById('homeHudPosition').textContent = state.handsInfo.length
+      ? state.handsInfo.map(h => h.position).join(' / ') : '—';
   }
   function renderTracker(){
     drawBaseFrame(ctx.tracker);
     drawQuadrantGrid(ctx.tracker);
-    document.getElementById('hudGesture').textContent = state.gesture;
-    document.getElementById('hudPosition').textContent = state.position;
+    document.getElementById('hudGesture').textContent = state.handsInfo.length
+      ? state.handsInfo.map(h => h.gesture.label).join(' / ') : 'No Hand';
+    document.getElementById('hudPosition').textContent = state.handsInfo.length
+      ? state.handsInfo.map(h => h.position).join(' / ') : '—';
     document.getElementById('hudSpeed').textContent = Math.round(state.speed);
-    document.getElementById('bigGesture').textContent = (state.gestureObj.emoji || '') + ' ' + state.gesture.toUpperCase();
-    document.getElementById('bigPosition').textContent = state.position;
+
+    const wrap = document.getElementById('handsReadout');
+    wrap.innerHTML = state.handsInfo.length
+      ? state.handsInfo.map(h => `
+          <div class="stat-block">
+            <div class="label">${h.label} hand</div>
+            <div class="value" style="font-size:18px;">${h.gesture.emoji} ${h.gesture.label}</div>
+            <p class="hint" style="margin-top:6px;">${h.position}</p>
+          </div>`).join('')
+      : '<div class="stat-block"><div class="label">Current gesture</div><div class="value" style="font-size:18px;">NO HAND</div></div>';
     document.getElementById('bigSpeed').textContent = Math.round(state.speed) + ' px/s';
   }
   function renderGameCanvas(id){
